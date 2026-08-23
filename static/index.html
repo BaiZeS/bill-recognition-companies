@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>票据识别</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1 class="app-title">票据识别</h1>
+  <div class="topbar-actions">
+    <label class="check"><input id="dewmCheck" type="checkbox" checked>去水印</label>
+    <label class="check"><input id="desealCheck" type="checkbox" checked>去红章</label>
+    <button id="uploadBtn" class="btn btn-primary">上传文件</button>
+    <input id="fileInput" type="file" multiple accept=".pdf,.jpg,.jpeg,.png" hidden>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-title">任务列表</div>
+    <ul id="taskList" class="task-list"></ul>
+    <div id="taskEmpty" class="side-empty" hidden>暂无任务，点击右上角上传</div>
+  </aside>
+
+  <main class="main">
+    <section class="pane">
+      <div class="pane-head">原文预览</div>
+      <div id="previewBody" class="pane-body"></div>
+    </section>
+
+    <section class="pane">
+      <div class="pane-head pane-head-row">
+        <div class="view-switch" id="viewSwitch" hidden>
+          <button class="seg active" data-view="restore">复原视图</button>
+          <button class="seg" data-view="extract">规则抽取</button>
+        </div>
+        <span id="formTitle">复原视图</span>
+        <div class="toolbar" id="toolbar" hidden>
+          <label class="tool">
+            <span class="tool-label">底图透明度</span>
+            <input id="ghostRange" type="range" min="0" max="50" value="15">
+          </label>
+          <div class="tool-group">
+            <button id="zoomOut" class="btn btn-ghost" title="缩小">−</button>
+            <button id="zoomFit" class="btn btn-ghost">适应宽度</button>
+            <button id="zoomIn" class="btn btn-ghost" title="放大">+</button>
+          </div>
+          <button id="saveBtn" class="btn btn-primary">保存修正</button>
+          <button id="downloadBtn" class="btn">下载 JSON</button>
+        </div>
+        <div class="toolbar" id="extractToolbar" hidden>
+          <div class="view-switch" id="extractTabs">
+            <button class="seg active" data-tab="result">抽取结果</button>
+            <button class="seg" data-tab="rules">规则模板</button>
+          </div>
+          <button id="extractBtn" class="btn btn-primary">按照规则抽取</button>
+          <button id="extractDownloadBtn" class="btn">下载抽取 JSON</button>
+        </div>
+      </div>
+      <div id="formBody" class="pane-body"></div>
+      <div id="extractBody" class="pane-body" hidden>
+        <div id="rulesPanel" class="rules-panel" hidden></div>
+        <div id="extractResult"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Sample data (contains sensitive bill information)
+input_doc/
+output/
+
+# Local tool state
+.codegraph/
+.mimocode/
+.playwright-cli/
