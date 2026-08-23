@@ -50,6 +50,9 @@ function init() {
   });
   $("#extractBtn").addEventListener("click", runExtract);
   $("#extractDownloadBtn").addEventListener("click", downloadExtracted);
+  $("#extractResult").addEventListener("input", (e) => {
+    if (e.target.tagName === "INPUT") scheduleSaveExtracted();
+  });
 
   renderEmptyPanes();
 
@@ -227,11 +230,24 @@ async function openTask(id) {
   switchView("restore");
   renderPreview();
   renderSheets();
+  loadExtracted(id);
 }
 
 function resetExtractState() {
   state.extract = { loading: false, error: "", groups: null, model: "", dirty: true };
   for (const k of Object.keys(EXTRACT_LINKS)) delete EXTRACT_LINKS[k];
+}
+
+async function loadExtracted(id) {
+  const resp = await fetch(`/api/tasks/${id}/extracted`);
+  if (!resp.ok || state.currentId !== id) return;
+  const data = await resp.json();
+  if (!Array.isArray(data?.groups)) return;
+  state.extract.groups = data.groups;
+  state.extract.model = data.model || "";
+  state.extract.dirty = true;
+  buildExtractLinks();
+  if (state.view === "extract" && state.extractTab === "result") renderExtract();
 }
 
 function resetPanesChrome() {
@@ -932,23 +948,49 @@ async function saveExtractConfig() {
 
 /* ---------- 抽取结果下载 ---------- */
 
+// 以表格输入框当前值为准回写 groups（用户可能编辑过抽取值）
+function currentExtractGroups() {
+  const groups = structuredClone(state.extract.groups);
+  for (const g of groups) {
+    for (const f of g.fields) {
+      const rowKey = `g${g.page}-${g.index}:${f.code}`;
+      const input = document.querySelector(
+        `#extractResult tr[data-hl="${CSS.escape(rowKey)}"] input`
+      );
+      if (input) f.value = input.value;
+    }
+  }
+  return groups;
+}
+
+let saveExtractTimer = null;
+
+function scheduleSaveExtracted() {
+  clearTimeout(saveExtractTimer);
+  saveExtractTimer = setTimeout(saveExtracted, 1000);
+}
+
+async function saveExtracted() {
+  if (!state.currentId || !state.extract.groups) return;
+  state.extract.groups = currentExtractGroups();
+  const resp = await fetch(`/api/tasks/${state.currentId}/extracted`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: state.extract.model, groups: state.extract.groups }),
+  });
+  if (resp.ok) showToast("抽取结果已保存");
+}
+
 function downloadExtracted() {
   if (!state.extract.groups) {
     showToast("暂无抽取结果");
     return;
   }
-  const results = [];
-  for (const g of state.extract.groups) {
+  const results = currentExtractGroups().map((g) => {
     const obj = {};
-    for (const f of g.fields) {
-      const rowKey = `g${g.page}-${g.index}:${f.code}`;
-      const input = document.querySelector(
-        `#extractBody tr[data-hl="${CSS.escape(rowKey)}"] input`
-      );
-      obj[f.code] = input ? input.value : f.value;
-    }
-    results.push(obj);
-  }
+    for (const f of g.fields) obj[f.code] = f.value;
+    return obj;
+  });
   const payload = {
     _meta: {
       filename: state.taskMeta.filename,

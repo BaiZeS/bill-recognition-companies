@@ -43,6 +43,7 @@ QUEUE: "queue.Queue[str]" = queue.Queue()
 # 结果内存缓存：cosfs 对"刚写入的文件"存在分钟级负缓存（exists() 不可靠），
 # 本进程写过的结果一律以内存态为准，文件只是持久化副本
 RESULTS: dict[str, list] = {}
+EXTRACTED: dict[str, dict] = {}
 
 _OCR = None
 
@@ -328,6 +329,7 @@ def delete_task(task_id: str):
     with TASKS_LOCK:
         TASKS.pop(task_id, None)
     RESULTS.pop(task_id, None)
+    EXTRACTED.pop(task_id, None)
     shutil.rmtree(TASKS_DIR / task_id, ignore_errors=True)
     _save_index()
     return {"deleted": task_id}
@@ -528,7 +530,33 @@ def extract_task(task_id: str, payload: dict | None = Body(default=None)):
                 raise HTTPException(502, f"抽取失败（第 {pi + 1} 页第 {gi + 1} 组）：{e}")
             fields = transform_fields(raw, rules, group, task["filename"])
             out_groups.append({"page": pi, "index": gi, "fields": fields})
-    return {"model": model, "groups": out_groups}
+    data = {"model": model, "groups": out_groups}
+    _write_json(TASKS_DIR / task_id / "extracted.json", data)
+    EXTRACTED[task_id] = data
+    return data
+
+
+@app.get("/api/tasks/{task_id}/extracted")
+def get_extracted(task_id: str):
+    _get_task(task_id)
+    if task_id in EXTRACTED:
+        return EXTRACTED[task_id]
+    data = _read_json(TASKS_DIR / task_id / "extracted.json")
+    if not isinstance(data, dict) or not isinstance(data.get("groups"), list):
+        raise HTTPException(404, "抽取结果未就绪")
+    return data
+
+
+@app.put("/api/tasks/{task_id}/extracted")
+def put_extracted(task_id: str, payload: dict = Body(...)):
+    task = _get_task(task_id)
+    if task["status"] != "done":
+        raise HTTPException(422, "任务未完成，无法保存")
+    if not isinstance(payload.get("groups"), list):
+        raise HTTPException(422, "抽取结果格式无效")
+    _write_json(TASKS_DIR / task_id / "extracted.json", payload)
+    EXTRACTED[task_id] = payload
+    return {"saved": True}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
