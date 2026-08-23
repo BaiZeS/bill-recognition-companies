@@ -40,16 +40,18 @@ function init() {
   $("#zoomOut").addEventListener("click", () => setZoom(state.zoom - 0.1));
   $("#zoomFit").addEventListener("click", () => setZoom(1));
 
-  $("#viewSwitch").addEventListener("click", (e) => {
-    const btn = e.target.closest(".seg");
-    if (btn) switchView(btn.dataset.view);
+  $("#viewTabs").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tab");
+    if (btn && !btn.disabled) switchView(btn.dataset.view);
   });
   $("#extractTabs").addEventListener("click", (e) => {
-    const btn = e.target.closest(".seg");
+    const btn = e.target.closest(".tab");
     if (btn) switchExtractTab(btn.dataset.tab);
   });
   $("#extractBtn").addEventListener("click", runExtract);
   $("#extractDownloadBtn").addEventListener("click", downloadExtracted);
+
+  renderEmptyPanes();
 
   let resizeTimer = null;
   window.addEventListener("resize", () => {
@@ -220,31 +222,33 @@ async function openTask(id) {
   resetExtractState();
   buildLinks();
   buildIdIndex();
+  setExtractTabEnabled(true);
+  // 先切回复原视图使容器可见，renderSheets 才能量到正确宽度
+  switchView("restore");
   renderPreview();
   renderSheets();
-  $("#viewSwitch").hidden = false;
-  switchView("restore");
 }
 
 function resetExtractState() {
-  state.extract = { loading: false, error: "", groups: null, model: "" };
+  state.extract = { loading: false, error: "", groups: null, model: "", dirty: true };
   for (const k of Object.keys(EXTRACT_LINKS)) delete EXTRACT_LINKS[k];
 }
 
 function resetPanesChrome() {
   state.view = "restore";
   state.extractTab = "result";
-  $("#formTitle").hidden = false;
-  $("#viewSwitch").hidden = true;
-  $("#extractToolbar").hidden = true;
-  $("#extractBody").hidden = true;
-  $("#formBody").hidden = false;
+  setExtractTabEnabled(false);
+  $("#restorePane").hidden = false;
+  $("#extractPane").hidden = true;
+  $("#toolbar").hidden = true;
   $("#rulesPanel").hidden = true;
   resetExtractState();
+  for (const btn of document.querySelectorAll("#viewTabs .tab")) {
+    btn.classList.toggle("active", btn.dataset.view === "restore");
+  }
 }
 
 function renderWorkingPanes(t) {
-  $("#toolbar").hidden = true;
   resetPanesChrome();
   state.result = null;
   const msg =
@@ -261,7 +265,6 @@ function renderWorkingPanes(t) {
 }
 
 function renderEmptyPanes() {
-  $("#toolbar").hidden = true;
   resetPanesChrome();
   for (const sel of ["#previewBody", "#formBody"]) {
     const body = $(sel);
@@ -591,28 +594,34 @@ function setZoom(z) {
 
 function switchView(view) {
   state.view = view;
-  for (const btn of document.querySelectorAll("#viewSwitch .seg")) {
+  for (const btn of document.querySelectorAll("#viewTabs .tab")) {
     btn.classList.toggle("active", btn.dataset.view === view);
   }
   const restore = view === "restore";
-  $("#formTitle").hidden = !restore;
-  $("#formBody").hidden = !restore;
-  $("#extractBody").hidden = restore;
+  $("#restorePane").hidden = !restore;
+  $("#extractPane").hidden = restore;
   $("#toolbar").hidden = !restore || !state.result;
-  $("#extractToolbar").hidden = restore || !state.result;
-  if (!restore) {
-    if (state.rules === null) loadRules();
-    switchExtractTab(state.extractTab);
-  }
+  if (!restore) switchExtractTab(state.extractTab);
+}
+
+function setExtractTabEnabled(enabled) {
+  const btn = document.querySelector('#viewTabs .tab[data-view="extract"]');
+  btn.disabled = !enabled;
+  btn.title = enabled ? "" : "请先上传并完成识别";
 }
 
 function switchExtractTab(tab) {
   state.extractTab = tab;
-  for (const btn of document.querySelectorAll("#extractTabs .seg")) {
+  for (const btn of document.querySelectorAll("#extractTabs .tab")) {
     btn.classList.toggle("active", btn.dataset.tab === tab);
   }
   $("#rulesPanel").hidden = tab !== "rules";
   $("#extractResult").hidden = tab !== "result";
+  // 仅在状态变化后重建结果表，避免丢弃用户对抽取值的编辑
+  if (tab === "result" && state.extract.dirty) {
+    renderExtract();
+    state.extract.dirty = false;
+  }
   if (tab === "rules") {
     if (state.rules === null) loadRules();
     else renderRulesEditor();
@@ -627,9 +636,10 @@ async function loadRules() {
 
 async function runExtract() {
   if (!state.currentId || state.extract.loading) return;
-  switchExtractTab("result");
   state.extract.loading = true;
   state.extract.error = "";
+  state.extract.dirty = false;
+  switchExtractTab("result");
   renderExtract();
   const body = state.rules && state.rules.length ? { rules: state.rules } : {};
   try {
@@ -648,6 +658,7 @@ async function runExtract() {
     state.extract.groups = null;
   } finally {
     state.extract.loading = false;
+    state.extract.dirty = false;
     renderExtract();
   }
 }

@@ -15,6 +15,9 @@
 
 * { box-sizing: border-box; }
 
+/* 作者样式的 display 会覆盖 UA 的 [hidden] 规则，需显式兜底 */
+[hidden] { display: none !important; }
+
 html, body { height: 100%; }
 
 body {
@@ -240,20 +243,29 @@ body {
   font-weight: 600;
 }
 
-.pane-head-row {
+.pane-head-tabs {
+  display: flex;
+  align-items: stretch;
+  padding: 0 12px;
+}
+
+.pane-toolbar {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 400;
 }
 
-.toolbar {
+.tab-pane {
+  flex: 1;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  font-weight: 400;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .tool {
@@ -270,6 +282,13 @@ body {
 .tool input[type="range"] { width: 90px; accent-color: var(--accent); }
 
 .tool-group { display: flex; gap: 2px; }
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 
 .pane-body {
   flex: 1;
@@ -406,38 +425,49 @@ body {
   box-shadow: 0 0 0 2px var(--hl-edge);
 }
 
-/* ---------- 右栏：视图切换 ---------- */
-.view-switch {
+/* ---------- 右栏：页签 ---------- */
+.tabs {
   display: flex;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  overflow: hidden;
+  align-items: stretch;
+  gap: 2px;
 }
 
-.view-switch .seg {
+.tab {
   appearance: none;
   border: none;
-  background: var(--panel);
-  color: rgba(31, 41, 55, 0.7);
-  font-size: 13px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: rgba(31, 41, 55, 0.65);
+  font-size: 14px;
+  font-weight: 600;
   font-family: inherit;
-  padding: 5px 14px;
+  padding: 9px 16px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 
-.view-switch .seg + .seg { border-left: 1px solid var(--line); }
+.tab:hover:not(:disabled) { background: var(--paper); color: var(--ink); }
 
-.view-switch .seg:hover { background: var(--paper); }
-
-.view-switch .seg.active {
-  background: var(--accent);
-  color: #fff;
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
-.view-switch .seg:focus-visible {
+.tab:disabled {
+  color: rgba(31, 41, 55, 0.3);
+  cursor: not-allowed;
+}
+
+.tab:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+.tabs-sub .tab {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
 }
 
 /* ---------- 右栏：规则抽取结果 ---------- */
@@ -646,6 +676,13 @@ body {
 }
 
 .key-badge-bad { color: var(--st-failed); }
+
+/* 二级页签下边线与工具栏底边对齐 */
+.pane-toolbar .tabs-sub {
+  align-self: stretch;
+  align-items: stretch;
+  margin-bottom: -8px;
+}
 
 /* ---------- toast ---------- */
 .toast {
