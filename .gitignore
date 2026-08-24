@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Environment variables (may contain API keys)
+.env
+
 # Sample data (contains sensitive bill information)
 input_doc/
 output/

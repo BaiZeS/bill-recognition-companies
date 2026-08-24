@@ -1,0 +1,10 @@
+services:
+  bill-recognition:
+    build: .
+    ports:
+      - "${BILL_PORT:-8000}:8000"
+    volumes:
+      - /qn-server-data:/qn-server-data
+    env_file:
+      - .env
+    restart: unless-stopped

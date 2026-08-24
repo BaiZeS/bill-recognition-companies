@@ -1,0 +1,11 @@
+.venv
+.git
+.codegraph
+.mimocode
+.playwright-cli
+input_doc
+output
+__pycache__
+docs
+.env
+tests
