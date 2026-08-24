@@ -12,6 +12,8 @@ const state = {
   rules: null,
   extract: { loading: false, error: "", groups: null, model: "" },
   taskMeta: { filename: "", output_name: "" },
+  selected: new Set(),
+  batch: { id: null, timer: null, overlay: {} },
 };
 
 const LINKS = {}; // id -> [id]（kv ↔ 来源行）
@@ -39,6 +41,29 @@ function init() {
   $("#zoomIn").addEventListener("click", () => setZoom(state.zoom + 0.1));
   $("#zoomOut").addEventListener("click", () => setZoom(state.zoom - 0.1));
   $("#zoomFit").addEventListener("click", () => setZoom(1));
+
+  $("#selectAll").addEventListener("change", (e) => {
+    const done = state.tasks.filter((t) => t.status === "done");
+    state.selected = e.target.checked ? new Set(done.map((t) => t.id)) : new Set();
+    renderTaskList();
+    renderBatchPanel();
+  });
+  $("#batchClear").addEventListener("click", () => {
+    state.selected.clear();
+    renderTaskList();
+    renderBatchPanel();
+  });
+  $("#batchExtractHead").addEventListener("click", () => toggleBatchBody("extract"));
+  $("#batchExportHead").addEventListener("click", () => toggleBatchBody("export"));
+  $("#batchTplBtn").addEventListener("click", () => {
+    window.location.href = "/api/rules-default.xlsx";
+  });
+  $("#batchRulesBtn").addEventListener("click", () => $("#batchRulesInput").click());
+  $("#batchRulesInput").addEventListener("change", (e) => {
+    if (e.target.files.length) batchUploadRules(e.target.files[0]);
+    e.target.value = "";
+  });
+  $("#rulesFileInput").addEventListener("change", uploadTaskRulesFile);
 
   $("#viewTabs").addEventListener("click", (e) => {
     const btn = e.target.closest(".tab");
@@ -102,6 +127,11 @@ async function pollTasks() {
   if (!resp.ok) return;
   state.tasks = (await resp.json()).tasks;
   renderTaskList();
+  const doneIds = new Set(state.tasks.filter((t) => t.status === "done").map((t) => t.id));
+  for (const id of [...state.selected]) {
+    if (!doneIds.has(id)) state.selected.delete(id);
+  }
+  renderBatchPanel();
 
   const cur = state.tasks.find((t) => t.id === state.currentId);
   if (cur) {
@@ -147,6 +177,21 @@ function renderTaskList() {
     li.className = "task-item" + (t.id === state.currentId ? " selected" : "");
     li.tabIndex = 0;
 
+    if (t.status === "done") {
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "task-check";
+      cb.checked = state.selected.has(t.id);
+      cb.addEventListener("click", (e) => e.stopPropagation());
+      cb.addEventListener("change", (e) => {
+        if (e.target.checked) state.selected.add(t.id);
+        else state.selected.delete(t.id);
+        renderTaskList();
+        renderBatchPanel();
+      });
+      li.append(cb);
+    }
+
     const dot = document.createElement("span");
     dot.className = `dot dot-${t.status}`;
 
@@ -158,8 +203,13 @@ function renderTaskList() {
     name.title = t.filename;
     const st = document.createElement("div");
     st.className = "task-status";
-    st.textContent = t.status === "failed" ? `失败：${t.error || ""}` : statusText(t);
+    const ov = state.batch.overlay[t.id];
+    st.textContent = ov
+      ? ov.text
+      : t.status === "failed" ? `失败：${t.error || ""}` : statusText(t);
     if (t.status === "failed") st.title = t.error || "";
+    else if (ov) st.title = ov.text;
+    if (ov && ov.error) st.classList.add("status-error");
     meta.append(name, st);
     li.append(dot, meta);
 
@@ -188,6 +238,65 @@ function renderTaskList() {
     });
     list.append(li);
   }
+}
+
+function renderBatchPanel() {
+  const n = state.selected.size;
+  $("#batchPanel").hidden = n === 0;
+  $("#batchCount").textContent = n;
+  const done = state.tasks.filter((t) => t.status === "done");
+  const sel = $("#selectAll");
+  sel.checked = done.length > 0 && done.every((t) => state.selected.has(t.id));
+  sel.indeterminate = !sel.checked && done.some((t) => state.selected.has(t.id));
+  const anyExtracted = done.some((t) => state.selected.has(t.id) && t.has_extracted);
+  const chk = $("#exportExtractedChk");
+  chk.disabled = !anyExtracted;
+  if (!anyExtracted) chk.checked = false;
+}
+
+function toggleBatchBody(which) {
+  const eb = $("#batchExtractBody");
+  const xb = $("#batchExportBody");
+  if (which === "extract") {
+    eb.hidden = !eb.hidden;
+    xb.hidden = true;
+  } else {
+    xb.hidden = !xb.hidden;
+    eb.hidden = true;
+  }
+}
+
+async function batchUploadRules(file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("task_ids", [...state.selected].join(","));
+  const resp = await fetch("/api/batch/rules/upload", { method: "POST", body: fd });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    showToast(`上传失败：${data.detail || resp.status}`);
+    return;
+  }
+  showToast(`已更新 ${data.updated} 个任务的规则`);
+  if (state.currentId && state.selected.has(state.currentId)) state.rules = null;
+}
+
+async function uploadTaskRulesFile(e) {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file || !state.currentId) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  const resp = await fetch(`/api/tasks/${state.currentId}/rules/upload`, {
+    method: "POST",
+    body: fd,
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    showToast(`上传失败：${data.detail || resp.status}`);
+    return;
+  }
+  await loadRules();
+  showToast("规则已更新");
 }
 
 async function deleteTask(t) {
@@ -235,6 +344,7 @@ async function openTask(id) {
 
 function resetExtractState() {
   state.extract = { loading: false, error: "", groups: null, model: "", dirty: true };
+  state.rules = null;
   for (const k of Object.keys(EXTRACT_LINKS)) delete EXTRACT_LINKS[k];
 }
 
@@ -645,7 +755,8 @@ function switchExtractTab(tab) {
 }
 
 async function loadRules() {
-  const resp = await fetch("/api/rule-template");
+  if (!state.currentId) return;
+  const resp = await fetch(`/api/tasks/${state.currentId}/rules`);
   state.rules = resp.ok ? (await resp.json()).rules : [];
   if (!$("#rulesPanel").hidden) renderRulesEditor();
 }
@@ -790,7 +901,7 @@ function renderRulesEditor() {
   }
   const head = document.createElement("div");
   head.className = "rules-head";
-  head.textContent = "抽取规则模板";
+  head.textContent = "抽取规则（仅对当前任务生效）";
   const table = document.createElement("table");
   table.className = "rules-table";
   const thead = document.createElement("thead");
@@ -867,15 +978,27 @@ function renderRulesEditor() {
   resetBtn.className = "btn";
   resetBtn.textContent = "恢复默认";
   resetBtn.addEventListener("click", async () => {
-    await fetch("/api/rule-template", { method: "DELETE" });
-    await loadRules();
-    showToast("已恢复默认规则模板");
+    const resp = await fetch("/api/rules-default");
+    if (!resp.ok) return;
+    state.rules = structuredClone((await resp.json()).rules);
+    renderRulesEditor();
+    showToast("已载入默认规则，保存后生效");
   });
   const saveBtn = document.createElement("button");
   saveBtn.className = "btn btn-primary";
   saveBtn.textContent = "保存规则";
   saveBtn.addEventListener("click", saveRules);
-  actions.append(addBtn, resetBtn, saveBtn);
+  const uploadBtn = document.createElement("button");
+  uploadBtn.className = "btn";
+  uploadBtn.textContent = "上传规则";
+  uploadBtn.addEventListener("click", () => $("#rulesFileInput").click());
+  const downloadBtn = document.createElement("button");
+  downloadBtn.className = "btn";
+  downloadBtn.textContent = "下载规则表格";
+  downloadBtn.addEventListener("click", () => {
+    window.location.href = `/api/tasks/${state.currentId}/rules.xlsx`;
+  });
+  actions.append(uploadBtn, downloadBtn, addBtn, resetBtn, saveBtn);
 
   const cfg = document.createElement("div");
   cfg.className = "rules-config";
@@ -906,7 +1029,7 @@ async function saveRules() {
     code: (r.code || "").trim(),
     length: r.length === "" || r.length == null ? null : r.length,
   }));
-  const resp = await fetch("/api/rule-template", {
+  const resp = await fetch(`/api/tasks/${state.currentId}/rules`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rules }),

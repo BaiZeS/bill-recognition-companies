@@ -14,14 +14,39 @@
     <label class="check"><input id="desealCheck" type="checkbox" checked>去红章</label>
     <button id="uploadBtn" class="btn btn-primary">上传文件</button>
     <input id="fileInput" type="file" multiple accept=".pdf,.jpg,.jpeg,.png" hidden>
+    <input id="rulesFileInput" type="file" accept=".xlsx,.json" hidden>
   </div>
 </header>
 
 <div class="layout">
   <aside class="sidebar">
     <div class="sidebar-title">任务列表</div>
+    <label class="select-all"><input id="selectAll" type="checkbox"> 全选</label>
     <ul id="taskList" class="task-list"></ul>
     <div id="taskEmpty" class="side-empty" hidden>暂无任务，点击右上角上传</div>
+    <div id="batchPanel" class="batch-panel" hidden>
+      <div class="batch-head">
+        <span>已选 <span id="batchCount">0</span> 个</span>
+        <button id="batchClear" class="btn btn-ghost">取消选择</button>
+      </div>
+      <button id="batchExtractHead" class="batch-acc-head">批量抽取</button>
+      <div id="batchExtractBody" class="batch-body" hidden>
+        <div class="batch-row">
+          <button id="batchTplBtn" class="btn">模板下载</button>
+          <button id="batchRulesBtn" class="btn">上传规则</button>
+          <input id="batchRulesInput" type="file" accept=".xlsx,.json" hidden>
+        </div>
+        <button id="batchExtractBtn" class="btn btn-primary batch-confirm">确认抽取</button>
+      </div>
+      <button id="batchExportHead" class="batch-acc-head">批量导出</button>
+      <div id="batchExportBody" class="batch-body" hidden>
+        <div class="batch-row">
+          <label class="check"><input id="exportResultChk" type="checkbox" checked> 识别结果</label>
+          <label class="check"><input id="exportExtractedChk" type="checkbox" checked> 抽取结果</label>
+        </div>
+        <button id="batchExportBtn" class="btn btn-primary batch-confirm">确认导出</button>
+      </div>
+    </div>
   </aside>
 
   <main class="main">

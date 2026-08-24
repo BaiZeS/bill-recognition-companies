@@ -120,6 +120,5 @@ def test_export_dedupes_task_ids(client):
     t1, _ = make_task(appmod, "去重导出")
     resp = c.post("/api/export", json={"task_ids": [t1, t1], "kind": "result"})
     assert resp.status_code == 200
-    names = zip_names(resp.content)
-    assert "去重导出_structured.json" in names
-    assert len([n for n in names if n.endswith(".json")]) == 1
+    names = zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
+    assert names.count("去重导出_structured.json") == 1
