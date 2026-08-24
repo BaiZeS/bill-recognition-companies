@@ -116,3 +116,49 @@ def test_batch_extract_no_key(client, monkeypatch):
     monkeypatch.setattr(appmod, "MIMO_AUTH_PATH", appmod.DATA_ROOT / "noauth.json")
     tid, _ = make_task(appmod, "无key")
     assert c.post("/api/batch/extract", json={"task_ids": [tid]}).status_code == 503
+
+
+def test_batch_extract_failure_does_not_block_others(client, monkeypatch):
+    c, appmod = client
+    monkeypatch.setenv("BAILIAN_API_KEY", "k")
+    ran = []
+
+    def fake_run(task, rules, api_key, base_url, model):
+        ran.append(task["id"])
+        if task["filename"].startswith("坏任务"):
+            raise RuntimeError("boom-first")
+        data = {"model": model, "groups": []}
+        appmod.EXTRACTED[task["id"]] = data
+        return data
+
+    monkeypatch.setattr(appmod, "_run_extract", fake_run)
+    t1, _ = make_task(appmod, "坏任务")
+    t2, _ = make_task(appmod, "好任务")
+    batch_id = c.post("/api/batch/extract", json={"task_ids": [t1, t2]}).json()["batch_id"]
+    data = wait_batch(c, appmod, batch_id)
+    by_task = {i["task_id"]: i for i in data["items"]}
+    assert by_task[t1]["status"] == "failed"
+    assert by_task[t2]["status"] == "done"
+    assert ran == [t1, t2]  # 失败后继续执行
+
+
+def test_batch_extract_dedupes_task_ids(client, monkeypatch):
+    c, appmod = client
+    monkeypatch.setenv("BAILIAN_API_KEY", "k")
+    ran = []
+
+    def fake_run(task, rules, api_key, base_url, model):
+        ran.append(task["id"])
+        return {"model": model, "groups": []}
+
+    monkeypatch.setattr(appmod, "_run_extract", fake_run)
+    t1, _ = make_task(appmod, "去重")
+    batch_id = c.post("/api/batch/extract", json={"task_ids": [t1, t1]}).json()["batch_id"]
+    data = wait_batch(c, appmod, batch_id)
+    assert len(data["items"]) == 1
+    assert ran == [t1]
+
+
+def test_batch_unknown_id_404(client):
+    c, _ = client
+    assert c.get("/api/batch/nonexist").status_code == 404

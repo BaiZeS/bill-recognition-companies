@@ -8,6 +8,7 @@ import queue
 import shutil
 import threading
 import time
+import traceback
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -48,6 +49,7 @@ EXTRACTED: dict[str, dict] = {}
 # 任务规则内存缓存：与 EXTRACTED 同模式，应对 cosfs 负缓存
 RULES: dict[str, list] = {}
 # 批量抽取注册表：batch_id -> {"status": "running"|"done", "items": {task_id: {...}}}
+# 批次仅内存态：进程重启后批次丢失，前端轮询遇 404 自行复位（与任务索引的重启恢复不同，批量抽取可重新发起）
 BATCH: dict[str, dict] = {}
 BATCH_LOCK = threading.Lock()
 XLSX_MT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -636,6 +638,7 @@ def put_extracted(task_id: str, payload: dict = Body(...)):
 @app.post("/api/batch/rules/upload")
 async def batch_rules_upload(file: UploadFile, task_ids: str = Form(...)):
     ids = [i for i in task_ids.split(",") if i.strip()]
+    ids = list(dict.fromkeys(ids))  # 保序去重：重复 task_ids 只处理一次
     tasks = []
     for tid in ids:
         t = TASKS.get(tid)
@@ -660,6 +663,7 @@ def batch_extract(payload: dict = Body(...)):
     ids = payload.get("task_ids") or []
     if not ids:
         raise HTTPException(422, "未选择任务")
+    ids = list(dict.fromkeys(ids))  # 保序去重：重复 task_ids 只抽取一次
     tasks, bad = [], []
     for tid in ids:
         t = TASKS.get(tid)
@@ -674,6 +678,9 @@ def batch_extract(payload: dict = Body(...)):
     with BATCH_LOCK:
         if any(b["status"] == "running" for b in BATCH.values()):
             raise HTTPException(409, "已有批量抽取进行中")
+        done_ids = [k for k, b in BATCH.items() if b["status"] == "done"]
+        for k in done_ids[:-19]:  # 最多保留 20 个已完成批次（含即将新建的）
+            del BATCH[k]
         batch_id = uuid.uuid4().hex[:10]
         BATCH[batch_id] = {
             "status": "running",
@@ -685,6 +692,7 @@ def batch_extract(payload: dict = Body(...)):
 
 
 def _batch_worker(batch_id: str, tasks: list):
+    # 单批次约束（409 互斥）保证唯一写线程；若放开并发必须先给状态更新加锁
     batch = BATCH[batch_id]
     api_key = _resolve_api_key()
     base_url, model = _resolve_base_url(), _resolve_model()
@@ -695,6 +703,7 @@ def _batch_worker(batch_id: str, tasks: list):
             _run_extract(t, _get_rules(t["id"]), api_key, base_url, model)
             item["status"] = "done"
         except Exception as e:  # noqa: BLE001 - 任务级兜底
+            traceback.print_exc()  # 长批次调试：打印完整堆栈，注册表仍只存短消息
             item["status"] = "failed"
             item["error"] = f"{type(e).__name__}: {e}"
     batch["status"] = "done"
