@@ -752,7 +752,7 @@ body {
   cursor: pointer;
 }
 
-.batch-acc-head:hover { background: #eef1f5; }
+.batch-acc-head:hover { background: var(--paper); }
 
 .batch-body {
   display: flex;

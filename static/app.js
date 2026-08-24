@@ -231,6 +231,7 @@ function renderTaskList() {
     };
     li.addEventListener("click", select);
     li.addEventListener("keydown", (e) => {
+      if (e.target.closest("input, button")) return;
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         select();
@@ -264,6 +265,8 @@ function toggleBatchBody(which) {
     xb.hidden = !xb.hidden;
     eb.hidden = true;
   }
+  $("#batchExtractHead").setAttribute("aria-expanded", String(!eb.hidden));
+  $("#batchExportHead").setAttribute("aria-expanded", String(!xb.hidden));
 }
 
 async function batchUploadRules(file) {
@@ -277,7 +280,10 @@ async function batchUploadRules(file) {
     return;
   }
   showToast(`已更新 ${data.updated} 个任务的规则`);
-  if (state.currentId && state.selected.has(state.currentId)) state.rules = null;
+  if (state.currentId && state.selected.has(state.currentId)) {
+    state.rules = null;
+    if (!$("#rulesPanel").hidden) loadRules();
+  }
 }
 
 async function uploadTaskRulesFile(e) {
@@ -306,6 +312,7 @@ async function deleteTask(t) {
     showToast(`删除失败：${(await resp.json().catch(() => ({}))).detail || resp.status}`);
     return;
   }
+  state.selected.delete(t.id);
   if (state.currentId === t.id) {
     state.currentId = null;
     state.result = null;
