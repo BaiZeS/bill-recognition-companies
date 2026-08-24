@@ -56,7 +56,7 @@
 - 存储：`TASKS_DIR/{id}/rules.json`，内存缓存 `RULES: dict[str, list]`（与 `EXTRACTED` 同模式，应对 cosfs 负缓存）。
 - 初始种子：现有全局 `rule_template.json` 若存在且有效则沿用，否则 `DEFAULT_RULE_TEMPLATE`；惰性生成（首次保存时写入）。
 - "规则模板"页签改为编辑**当前任务**的规则，顶部提示"规则仅对当前任务生效"；切换任务重新加载。
-- 页签按钮：`上传规则` `下载规则表格` `恢复默认` `保存规则`。
+- 页签按钮：`上传规则` `下载规则表格` `恢复默认` `保存规则`；现有的"添加字段"行内编辑与"模型设置"区块（API key/模型/端点配置入口）原样保留。
 - "按照规则抽取"使用当前任务规则；前端仍把编辑器当前内容作为 `payload.rules` 传递（保留未保存可抽取的现有行为）。
 - 移除 `/api/rule-template`（GET/PUT/DELETE）。
 - 删除任务时 `rules.json` 随任务目录一并删除（现有 rmtree 已覆盖）。
@@ -112,7 +112,7 @@
 - **Dockerfile**：`python:3.12-slim` → 装 uv → 拷贝代码 → `uv sync`（清华源已在 pyproject 配置）→ 建立模型缓存软链（`~/.paddlex/official_models → /qn-server-data/paddlex-models`、`fonts → /qn-server-data/paddlex-fonts`）→ `EXPOSE 8000` → `CMD uvicorn app:app --host 0.0.0.0 --port 8000`（单 worker）。
 - **docker-compose.yml**：`build: .`；`ports: "${BILL_PORT:-8000}:8000"`；`volumes: /qn-server-data:/qn-server-data`；`env_file: .env`；`restart: unless-stopped`。
 - **.env.example**：`BAILIAN_API_KEY=`、`BILL_PORT=8000`。
-- **.dockerignore**：`.venv` `.git` `input_doc` `output` `__pycache__` `.mimocode` `.playwright-cli` `docs`。
+- **.dockerignore**：`.venv` `.git` `input_doc` `output` `__pycache__` `.mimocode` `.playwright-cli` `.codegraph` `docs`。
 - bind mount 满足 `os.path.ismount` 校验，**无需改动挂载检查代码**。
 - 模型缓存经软链复用：容器重建不重新下载模型；无 cosfs 的全新机器上数据目录自动创建，模型首次识别时自动下载。
 - 一键流程：`cp .env.example .env`（填 key）→ `docker compose up -d --build`。README 增加部署章节。
@@ -121,7 +121,7 @@
 
 - Excel 解析/校验失败 → 422 + 行号错误，整体不落盘。
 - 批量抽取含非 done 任务 → 422 列出非法任务；批次进行中再提交 → 409。
-- 导出：无 done 任务 → 422；kind=extracted 且全部任务无抽取结果 → 422 提示。
+- 导出：请求含非 done 任务时仅导出其中 done 子集（UI 本就只允许勾选 done，此为兜底）；done 子集为空 → 422；kind=extracted 且全部任务无抽取结果 → 422 提示。
 - cosfs 负缓存：规则/抽取/识别一律内存缓存优先、文件兜底（沿用现有模式）。
 - 前端：无完成任务 → 批量操作区不出现；"抽取结果"复选框在无可导出抽取结果时禁用。
 
