@@ -12,10 +12,9 @@ RUN pip install --no-cache-dir -i https://mirrors.cloud.tencent.com/pypi/simple 
 
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-dev && rm -rf /root/.cache/uv
 COPY app.py extract.py main.py bulk.py ./
 COPY static ./static
-
-RUN uv sync --frozen --no-dev
 
 # 模型缓存与字体指向数据卷；目标目录不存在时由启动命令补建（全新机器首次自动下载模型）
 RUN mkdir -p /root/.paddlex \
@@ -24,4 +23,4 @@ RUN mkdir -p /root/.paddlex \
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "mkdir -p /qn-server-data/paddlex-models /qn-server-data/paddlex-fonts && uv run uvicorn app:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "mkdir -p /qn-server-data/paddlex-models /qn-server-data/paddlex-fonts && exec .venv/bin/python -m uvicorn app:app --host 0.0.0.0 --port 8000"]
