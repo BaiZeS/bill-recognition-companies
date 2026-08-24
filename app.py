@@ -26,6 +26,7 @@ from extract import (
     transform_fields,
     validate_rules,
 )
+import bulk
 from main import _erase_seals, _erase_watermarks, build_ocr, load_pages, parse_page
 
 # 数据全部落对象存储（cosfs 挂载），本地仓库只留代码
@@ -44,6 +45,9 @@ QUEUE: "queue.Queue[str]" = queue.Queue()
 # 本进程写过的结果一律以内存态为准，文件只是持久化副本
 RESULTS: dict[str, list] = {}
 EXTRACTED: dict[str, dict] = {}
+# 任务规则内存缓存：与 EXTRACTED 同模式，应对 cosfs 负缓存
+RULES: dict[str, list] = {}
+XLSX_MT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 _OCR = None
 
@@ -364,11 +368,85 @@ def _write_json(path, obj):
         print(f"[warn] {path.name} 写入失败：{e}", flush=True)
 
 
-def _load_rule_template():
+def _seed_rules() -> list:
+    # 兼容迁移：优先沿用旧全局模板文件，之后各任务独立演化
     data = _read_json(RULE_TEMPLATE_PATH)
     if isinstance(data, dict) and isinstance(data.get("rules"), list) and data["rules"]:
-        return data["rules"]
+        try:
+            return validate_rules(data["rules"])
+        except ValueError:
+            pass
     return DEFAULT_RULE_TEMPLATE
+
+
+def _get_rules(task_id: str) -> list:
+    if task_id in RULES:
+        return RULES[task_id]
+    data = _read_json(TASKS_DIR / task_id / "rules.json")
+    if isinstance(data, dict) and isinstance(data.get("rules"), list):
+        RULES[task_id] = data["rules"]
+        return data["rules"]
+    return _seed_rules()
+
+
+@app.get("/api/tasks/{task_id}/rules")
+def get_task_rules(task_id: str):
+    _get_task(task_id)
+    return {"rules": _get_rules(task_id)}
+
+
+@app.put("/api/tasks/{task_id}/rules")
+def put_task_rules(task_id: str, payload: dict = Body(...)):
+    task = _get_task(task_id)
+    if task["status"] != "done":
+        raise HTTPException(422, "任务未完成，无法保存规则")
+    try:
+        rules = validate_rules(payload.get("rules"))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    _write_json(TASKS_DIR / task_id / "rules.json", {"rules": rules})
+    RULES[task_id] = rules
+    return {"saved": len(rules)}
+
+
+@app.post("/api/tasks/{task_id}/rules/upload")
+async def upload_task_rules(task_id: str, file: UploadFile):
+    task = _get_task(task_id)
+    if task["status"] != "done":
+        raise HTTPException(422, "任务未完成，无法保存规则")
+    data = await file.read()
+    try:
+        rules = bulk.load_rules_file(file.filename or "", data)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    _write_json(TASKS_DIR / task_id / "rules.json", {"rules": rules})
+    RULES[task_id] = rules
+    return {"saved": len(rules)}
+
+
+@app.get("/api/tasks/{task_id}/rules.xlsx")
+def download_task_rules_xlsx(task_id: str):
+    task = _get_task(task_id)
+    body = bulk.rules_to_xlsx(_get_rules(task_id))
+    name = f"{task['output_name']}_rules.xlsx"
+    return Response(
+        body, media_type=XLSX_MT,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"},
+    )
+
+
+@app.get("/api/rules-default")
+def get_rules_default():
+    return {"rules": DEFAULT_RULE_TEMPLATE}
+
+
+@app.get("/api/rules-default.xlsx")
+def get_rules_default_xlsx():
+    body = bulk.rules_to_xlsx(DEFAULT_RULE_TEMPLATE)
+    return Response(
+        body, media_type=XLSX_MT,
+        headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote("规则模板.xlsx")},
+    )
 
 
 def _extract_config():
@@ -446,30 +524,6 @@ def _call_llm(system, user, api_key, base_url, model):
     raise RuntimeError(last_err or "未知错误")
 
 
-@app.get("/api/rule-template")
-def get_rule_template():
-    return {"rules": _load_rule_template()}
-
-
-@app.put("/api/rule-template")
-def put_rule_template(payload: dict = Body(...)):
-    try:
-        rules = validate_rules(payload.get("rules"))
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    _write_json(RULE_TEMPLATE_PATH, {"rules": rules})
-    return {"saved": len(rules)}
-
-
-@app.delete("/api/rule-template")
-def delete_rule_template():
-    try:
-        RULE_TEMPLATE_PATH.unlink()
-    except OSError:
-        pass
-    return {"reset": True}
-
-
 @app.get("/api/extract-config")
 def get_extract_config():
     return {
@@ -492,6 +546,32 @@ def put_extract_config(payload: dict = Body(...)):
     return {"saved": True}
 
 
+def _run_extract(task: dict, rules: list, api_key: str, base_url: str, model: str) -> dict:
+    task_id = task["id"]
+    if task_id in RESULTS:
+        doc = RESULTS[task_id]
+    else:
+        result_path = TASKS_DIR / task_id / "result.json"
+        if not result_path.exists():
+            raise FileNotFoundError("结果未就绪")
+        doc = json.loads(result_path.read_text(encoding="utf-8"))
+    out_groups = []
+    for pi, page in enumerate(doc):
+        for gi, group in enumerate(group_page(page)):
+            system, user = build_prompt(rules, group, task["filename"])
+            try:
+                text = _call_llm(system, user, api_key, base_url, model)
+                raw = parse_llm_response(text)
+            except (RuntimeError, json.JSONDecodeError) as e:
+                raise RuntimeError(f"第 {pi + 1} 页第 {gi + 1} 组：{e}") from None
+            fields = transform_fields(raw, rules, group, task["filename"])
+            out_groups.append({"page": pi, "index": gi, "fields": fields})
+    data = {"model": model, "groups": out_groups}
+    _write_json(TASKS_DIR / task_id / "extracted.json", data)
+    EXTRACTED[task_id] = data
+    return data
+
+
 @app.post("/api/tasks/{task_id}/extract")
 def extract_task(task_id: str, payload: dict | None = Body(default=None)):
     task = _get_task(task_id)
@@ -510,30 +590,13 @@ def extract_task(task_id: str, payload: dict | None = Body(default=None)):
         except ValueError as e:
             raise HTTPException(422, str(e))
     else:
-        rules = _load_rule_template()
-    if task_id in RESULTS:
-        doc = RESULTS[task_id]
-    else:
-        result_path = TASKS_DIR / task_id / "result.json"
-        if not result_path.exists():
-            raise HTTPException(404, "结果未就绪")
-        doc = json.loads(result_path.read_text(encoding="utf-8"))
-    base_url, model = _resolve_base_url(), _resolve_model()
-    out_groups = []
-    for pi, page in enumerate(doc):
-        for gi, group in enumerate(group_page(page)):
-            system, user = build_prompt(rules, group, task["filename"])
-            try:
-                text = _call_llm(system, user, api_key, base_url, model)
-                raw = parse_llm_response(text)
-            except (RuntimeError, json.JSONDecodeError) as e:
-                raise HTTPException(502, f"抽取失败（第 {pi + 1} 页第 {gi + 1} 组）：{e}")
-            fields = transform_fields(raw, rules, group, task["filename"])
-            out_groups.append({"page": pi, "index": gi, "fields": fields})
-    data = {"model": model, "groups": out_groups}
-    _write_json(TASKS_DIR / task_id / "extracted.json", data)
-    EXTRACTED[task_id] = data
-    return data
+        rules = _get_rules(task_id)
+    try:
+        return _run_extract(task, rules, api_key, _resolve_base_url(), _resolve_model())
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except (RuntimeError, json.JSONDecodeError) as e:
+        raise HTTPException(502, f"抽取失败：{e}")
 
 
 @app.get("/api/tasks/{task_id}/extracted")

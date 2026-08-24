@@ -515,7 +515,7 @@ def validate_rules(payload):
         if not code:
             raise ValueError(f"第 {i + 1} 行字段编码为空")
         if code in seen:
-            raise ValueError(f"字段编码重复：{code}")
+            raise ValueError(f"第 {i + 1} 行字段编码重复：{code}")
         seen.add(code)
         length = r.get("length")
         if isinstance(length, str) and length.strip():
