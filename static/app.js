@@ -13,7 +13,7 @@ const state = {
   extract: { loading: false, error: "", groups: null, model: "" },
   taskMeta: { filename: "", output_name: "" },
   selected: new Set(),
-  batch: { id: null, timer: null, overlay: {}, exportResult: true, exportExtracted: true },
+  batch: { id: null, timer: null, overlay: {}, exportResult: true, exportExtracted: true, exporting: false },
 };
 
 const LINKS = {}; // id -> [id]（kv ↔ 来源行）
@@ -301,12 +301,18 @@ async function startBatchExtract() {
     showToast("已有批量抽取进行中");
     return;
   }
-  const resp = await fetch("/api/batch/extract", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task_ids: [...state.selected] }),
-  });
-  const data = await resp.json().catch(() => ({}));
+  let resp, data;
+  try {
+    resp = await fetch("/api/batch/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_ids: [...state.selected] }),
+    });
+    data = await resp.json();
+  } catch (e) {
+    showToast(`批量抽取失败：${e.message || e}`);
+    return;
+  }
   if (!resp.ok) {
     showToast(`批量抽取失败：${data.detail || resp.status}`);
     return;
@@ -315,17 +321,29 @@ async function startBatchExtract() {
   pollBatch();
 }
 
+function resetBatchState() {
+  state.batch.id = null;
+  state.batch.overlay = {};
+  renderTaskList();
+}
+
 async function pollBatch() {
   clearTimeout(state.batch.timer);
-  const resp = await fetch(`/api/batch/${state.batch.id}`);
-  if (!resp.ok) {
-    // 批次不存在（如服务重启丢失）：静默复位
-    state.batch.id = null;
-    state.batch.overlay = {};
-    renderTaskList();
+  let data;
+  try {
+    const resp = await fetch(`/api/batch/${state.batch.id}`);
+    if (resp.status === 404) {
+      // 批次不存在（如服务重启丢失）：静默复位
+      resetBatchState();
+      return;
+    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    data = await resp.json();
+  } catch (e) {
+    showToast(`批量状态查询失败：${e.message || e}`);
+    resetBatchState();
     return;
   }
-  const data = await resp.json();
   const overlay = {};
   let ok = 0;
   let fail = 0;
@@ -358,6 +376,7 @@ async function pollBatch() {
 }
 
 async function batchExport() {
+  if (state.batch.exporting) return;
   const kinds = [];
   if ($("#exportResultChk").checked) kinds.push("result");
   if ($("#exportExtractedChk").checked) kinds.push("extracted");
@@ -366,25 +385,36 @@ async function batchExport() {
     return;
   }
   const taskIds = [...state.selected];
-  for (const kind of kinds) {
-    showToast("正在生成…");
-    const resp = await fetch("/api/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task_ids: taskIds, kind }),
-    });
-    if (!resp.ok) {
-      showToast(`导出失败：${(await resp.json().catch(() => ({}))).detail || resp.status}`);
-      continue;
+  state.batch.exporting = true;
+  $("#batchExportBtn").disabled = true;
+  try {
+    for (const kind of kinds) {
+      try {
+        showToast("正在生成…");
+        const resp = await fetch("/api/export", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ task_ids: taskIds, kind }),
+        });
+        if (!resp.ok) {
+          showToast(`导出失败：${(await resp.json().catch(() => ({}))).detail || resp.status}`);
+          continue;
+        }
+        const blob = await resp.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = kind === "result" ? "识别结果.zip" : "抽取结果.zip";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        const skipped = parseInt(resp.headers.get("X-Skipped") || "0", 10);
+        if (skipped) showToast(`${skipped} 个任务无抽取结果已跳过`);
+      } catch (e) {
+        showToast(`导出失败：${e.message || e}`);
+      }
     }
-    const blob = await resp.blob();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = kind === "result" ? "识别结果.zip" : "抽取结果.zip";
-    a.click();
-    URL.revokeObjectURL(a.href);
-    const skipped = parseInt(resp.headers.get("X-Skipped") || "0", 10);
-    if (skipped) showToast(`${skipped} 个任务无抽取结果已跳过`);
+  } finally {
+    state.batch.exporting = false;
+    $("#batchExportBtn").disabled = false;
   }
 }
 
