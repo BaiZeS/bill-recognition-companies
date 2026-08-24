@@ -334,6 +334,7 @@ def delete_task(task_id: str):
         TASKS.pop(task_id, None)
     RESULTS.pop(task_id, None)
     EXTRACTED.pop(task_id, None)
+    RULES.pop(task_id, None)
     shutil.rmtree(TASKS_DIR / task_id, ignore_errors=True)
     _save_index()
     return {"deleted": task_id}
@@ -384,8 +385,12 @@ def _get_rules(task_id: str) -> list:
         return RULES[task_id]
     data = _read_json(TASKS_DIR / task_id / "rules.json")
     if isinstance(data, dict) and isinstance(data.get("rules"), list):
-        RULES[task_id] = data["rules"]
-        return data["rules"]
+        try:
+            rules = validate_rules(data["rules"])
+        except ValueError:
+            return _seed_rules()
+        RULES[task_id] = rules
+        return rules
     return _seed_rules()
 
 

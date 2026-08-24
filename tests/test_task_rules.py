@@ -117,3 +117,51 @@ def test_extract_uses_task_rules(client, monkeypatch):
     assert resp.status_code == 200
     assert any("MYFIELD" in s + u for s, u in calls)
     assert (appmod.TASKS_DIR / tid / "extracted.json").exists()
+
+
+def test_extract_payload_rules_override(client, monkeypatch):
+    c, appmod = client
+    monkeypatch.setenv("BAILIAN_API_KEY", "test-key")
+    calls = []
+
+    def fake_llm(system, user, api_key, base_url, model):
+        calls.append((system, user))
+        return '{"fields": {}}'
+
+    monkeypatch.setattr(appmod, "_call_llm", fake_llm)
+    tid, _ = make_task(appmod, "覆盖规则")
+    resp = c.post(f"/api/tasks/{tid}/extract", json={"rules": [
+        {"code": "OVR1", "name": "覆盖字段", "required": "必填",
+         "type": "字符", "length": None, "strategy": ""}]})
+    assert resp.status_code == 200
+    assert any("OVR1" in s + u for s, u in calls)
+
+
+def test_extract_rules_from_file_after_restart(client, monkeypatch):
+    c, appmod = client
+    monkeypatch.setenv("BAILIAN_API_KEY", "test-key")
+    calls = []
+
+    def fake_llm(system, user, api_key, base_url, model):
+        calls.append((system, user))
+        return '{"fields": {}}'
+
+    monkeypatch.setattr(appmod, "_call_llm", fake_llm)
+    tid, _ = make_task(appmod, "文件规则")
+    c.put(f"/api/tasks/{tid}/rules", json={"rules": [
+        {"code": "FILE1", "name": "文件字段", "required": "必填",
+         "type": "字符", "length": None, "strategy": ""}]})
+    appmod.RULES.clear()  # 模拟进程重启后缓存丢失
+    resp = c.post(f"/api/tasks/{tid}/extract", json={})
+    assert resp.status_code == 200
+    assert any("FILE1" in s + u for s, u in calls)
+
+
+def test_corrupted_rules_file_falls_back_to_seed(client):
+    c, appmod = client
+    tid, _ = make_task(appmod, "损坏规则")
+    (appmod.TASKS_DIR / tid / "rules.json").write_text(
+        '{"rules": [{"name": "无编码"}]}', encoding="utf-8")
+    resp = c.get(f"/api/tasks/{tid}/rules")
+    assert resp.status_code == 200
+    assert len(resp.json()["rules"]) == 21  # 回退默认种子
