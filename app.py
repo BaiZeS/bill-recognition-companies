@@ -47,6 +47,9 @@ RESULTS: dict[str, list] = {}
 EXTRACTED: dict[str, dict] = {}
 # 任务规则内存缓存：与 EXTRACTED 同模式，应对 cosfs 负缓存
 RULES: dict[str, list] = {}
+# 批量抽取注册表：batch_id -> {"status": "running"|"done", "items": {task_id: {...}}}
+BATCH: dict[str, dict] = {}
+BATCH_LOCK = threading.Lock()
 XLSX_MT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 _OCR = None
@@ -625,6 +628,84 @@ def put_extracted(task_id: str, payload: dict = Body(...)):
     _write_json(TASKS_DIR / task_id / "extracted.json", payload)
     EXTRACTED[task_id] = payload
     return {"saved": True}
+
+
+# ---------- 批量操作 ----------
+
+
+@app.post("/api/batch/rules/upload")
+async def batch_rules_upload(file: UploadFile, task_ids: str = Form(...)):
+    ids = [i for i in task_ids.split(",") if i.strip()]
+    tasks = []
+    for tid in ids:
+        t = TASKS.get(tid)
+        if t is None or t["status"] != "done":
+            raise HTTPException(422, f"任务不存在或未完成：{tid}")
+        tasks.append(t)
+    if not tasks:
+        raise HTTPException(422, "未选择任务")
+    data = await file.read()
+    try:
+        rules = bulk.load_rules_file(file.filename or "", data)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    for t in tasks:
+        _write_json(TASKS_DIR / t["id"] / "rules.json", {"rules": rules})
+        RULES[t["id"]] = rules
+    return {"updated": len(tasks)}
+
+
+@app.post("/api/batch/extract")
+def batch_extract(payload: dict = Body(...)):
+    ids = payload.get("task_ids") or []
+    if not ids:
+        raise HTTPException(422, "未选择任务")
+    tasks, bad = [], []
+    for tid in ids:
+        t = TASKS.get(tid)
+        if t is None or t["status"] != "done":
+            bad.append(str(tid))
+        else:
+            tasks.append(t)
+    if bad:
+        raise HTTPException(422, f"以下任务未完成，无法抽取：{'、'.join(bad)}")
+    if not _resolve_api_key():
+        raise HTTPException(503, "未配置百炼 API key")
+    with BATCH_LOCK:
+        if any(b["status"] == "running" for b in BATCH.values()):
+            raise HTTPException(409, "已有批量抽取进行中")
+        batch_id = uuid.uuid4().hex[:10]
+        BATCH[batch_id] = {
+            "status": "running",
+            "items": {t["id"]: {"task_id": t["id"], "status": "pending", "error": None}
+                      for t in tasks},
+        }
+    threading.Thread(target=_batch_worker, args=(batch_id, tasks), daemon=True).start()
+    return {"batch_id": batch_id}
+
+
+def _batch_worker(batch_id: str, tasks: list):
+    batch = BATCH[batch_id]
+    api_key = _resolve_api_key()
+    base_url, model = _resolve_base_url(), _resolve_model()
+    for t in tasks:
+        item = batch["items"][t["id"]]
+        item["status"] = "processing"
+        try:
+            _run_extract(t, _get_rules(t["id"]), api_key, base_url, model)
+            item["status"] = "done"
+        except Exception as e:  # noqa: BLE001 - 任务级兜底
+            item["status"] = "failed"
+            item["error"] = f"{type(e).__name__}: {e}"
+    batch["status"] = "done"
+
+
+@app.get("/api/batch/{batch_id}")
+def get_batch(batch_id: str):
+    batch = BATCH.get(batch_id)
+    if batch is None:
+        raise HTTPException(404, "批次不存在")
+    return {"status": batch["status"], "items": list(batch["items"].values())}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
