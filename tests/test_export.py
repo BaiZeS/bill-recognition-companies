@@ -89,3 +89,37 @@ def test_tasks_list_has_extracted(client):
     tasks = {t["id"]: t for t in c.get("/api/tasks").json()["tasks"]}
     assert tasks[t1]["has_extracted"] is False
     assert tasks[t2]["has_extracted"] is True
+
+
+def test_export_result_corrected_from_disk(client):
+    # has_corrected=True 且内存缓存为空 → 读磁盘 corrected 文件
+    c, appmod = client
+    tid, doc = make_task(appmod, "磁盘修正", has_corrected=True)
+    appmod.RESULTS.pop(tid, None)
+    corrected = [dict(doc[0])]
+    corrected[0]["kv"] = [dict(doc[0]["kv"][0], value="777")]
+    (appmod.OUTPUT_DIR / "磁盘修正_corrected.json").write_text(
+        json.dumps(corrected, ensure_ascii=False), encoding="utf-8")
+    resp = c.post("/api/export", json={"task_ids": [tid], "kind": "result"})
+    saved = json.loads(zip_read(resp.content, "磁盘修正_corrected.json"))
+    assert saved[0]["kv"][0]["value"] == "777"
+
+
+def test_export_result_missing_files_404(client):
+    # structured 与 corrected 均缺失 → 404 而非 500
+    c, appmod = client
+    tid, _ = make_task(appmod, "丢失结果")
+    (appmod.OUTPUT_DIR / "丢失结果_structured.json").unlink()
+    appmod.RESULTS.pop(tid, None)
+    resp = c.post("/api/export", json={"task_ids": [tid], "kind": "result"})
+    assert resp.status_code == 404
+
+
+def test_export_dedupes_task_ids(client):
+    c, appmod = client
+    t1, _ = make_task(appmod, "去重导出")
+    resp = c.post("/api/export", json={"task_ids": [t1, t1], "kind": "result"})
+    assert resp.status_code == 200
+    names = zip_names(resp.content)
+    assert "去重导出_structured.json" in names
+    assert len([n for n in names if n.endswith(".json")]) == 1

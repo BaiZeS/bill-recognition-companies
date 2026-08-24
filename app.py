@@ -181,7 +181,10 @@ def _public(t: dict) -> dict:
         "id", "filename", "status", "error", "output_name",
         "page_count", "pages_done", "created",
     )}
-    pub["has_extracted"] = tid in EXTRACTED or (TASKS_DIR / tid / "extracted.json").exists()
+    pub["has_extracted"] = (
+        t.get("status") == "done"
+        and (tid in EXTRACTED or (TASKS_DIR / tid / "extracted.json").exists())
+    )
     return pub
 
 
@@ -647,6 +650,8 @@ def _result_doc(t: dict):
         if corrected.exists():
             return json.loads(corrected.read_text(encoding="utf-8")), "corrected"
     structured = OUTPUT_DIR / f"{t['output_name']}_structured.json"
+    if not structured.exists():
+        raise HTTPException(404, "结果未就绪")
     return json.loads(structured.read_text(encoding="utf-8")), "structured"
 
 
@@ -655,7 +660,7 @@ def export_batch(payload: dict = Body(...)):
     kind = payload.get("kind")
     if kind not in ("result", "extracted"):
         raise HTTPException(422, "kind 必须为 result 或 extracted")
-    ids = payload.get("task_ids") or []
+    ids = list(dict.fromkeys(payload.get("task_ids") or []))
     tasks = [TASKS[i] for i in ids if i in TASKS and TASKS[i]["status"] == "done"]
     if not tasks:
         raise HTTPException(422, "没有可导出的完成任务")
