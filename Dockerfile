@@ -1,6 +1,14 @@
 FROM python:3.12-slim
 
-RUN pip install --no-cache-dir uv
+# 腾讯云镜像源加速：apt（Debian bookworm deb822 源）
+RUN sed -i 's|deb.debian.org|mirrors.cloud.tencent.com|g' /etc/apt/sources.list.d/debian.sources
+
+# OpenCV/PaddlePaddle runtime deps: libgl1 -> libGL.so.1, libglib2.0-0 -> OpenCV, libgomp1 -> PaddlePaddle OpenMP
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 libglib2.0-0 libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir -i https://mirrors.cloud.tencent.com/pypi/simple uv
 
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
