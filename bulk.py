@@ -88,3 +88,55 @@ def rules_to_xlsx(rules: list[dict]) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def flatten_extracted(data: dict, filename: str) -> dict:
+    """存储格式 {model, groups} → 前端单任务下载同款 {_meta, results} 扁平格式。"""
+    results = []
+    for g in data.get("groups", []):
+        obj = {}
+        for f in g.get("fields", []):
+            obj[f.get("code", "")] = f.get("value", "")
+        results.append(obj)
+    return {
+        "_meta": {
+            "filename": filename,
+            "model": data.get("model", ""),
+            "extracted_at": datetime.now(timezone.utc).isoformat(),
+            "groups": len(results),
+        },
+        "results": results,
+    }
+
+
+def result_summary_xlsx(rows: list[dict]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "识别结果汇总"
+    ws.append(["文件名", "页码", "字段名", "字段值"])
+    for r in rows:
+        ws.append([r["filename"], r["page"], r["key"], r["value"]])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def extracted_summary_xlsx(rows: list[dict], columns: list[dict]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "抽取结果汇总"
+    ws.append(["文件名", "组序号", "页码"] + [c["name"] or c["code"] for c in columns])
+    for r in rows:
+        ws.append([r["filename"], r["group"], r["page"]]
+                  + [r.get(c["code"], "") for c in columns])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def build_zip(entries: list[tuple[str, bytes]]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, content in entries:
+            zf.writestr(name, content)
+    return buf.getvalue()

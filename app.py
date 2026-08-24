@@ -176,10 +176,13 @@ app = FastAPI(lifespan=lifespan)
 
 
 def _public(t: dict) -> dict:
-    return {k: t.get(k) for k in (
+    tid = t.get("id")
+    pub = {k: t.get(k) for k in (
         "id", "filename", "status", "error", "output_name",
         "page_count", "pages_done", "created",
     )}
+    pub["has_extracted"] = tid in EXTRACTED or (TASKS_DIR / tid / "extracted.json").exists()
+    return pub
 
 
 @app.post("/api/upload")
@@ -633,6 +636,79 @@ def put_extracted(task_id: str, payload: dict = Body(...)):
 
 
 # ---------- 批量操作 ----------
+
+
+def _result_doc(t: dict):
+    """(识别文档, corrected|structured)；取值顺序与单任务下载一致，内存优先。"""
+    corrected = OUTPUT_DIR / f"{t['output_name']}_corrected.json"
+    if t.get("has_corrected") or corrected.exists():
+        if t["id"] in RESULTS:
+            return RESULTS[t["id"]], "corrected"
+        if corrected.exists():
+            return json.loads(corrected.read_text(encoding="utf-8")), "corrected"
+    structured = OUTPUT_DIR / f"{t['output_name']}_structured.json"
+    return json.loads(structured.read_text(encoding="utf-8")), "structured"
+
+
+@app.post("/api/export")
+def export_batch(payload: dict = Body(...)):
+    kind = payload.get("kind")
+    if kind not in ("result", "extracted"):
+        raise HTTPException(422, "kind 必须为 result 或 extracted")
+    ids = payload.get("task_ids") or []
+    tasks = [TASKS[i] for i in ids if i in TASKS and TASKS[i]["status"] == "done"]
+    if not tasks:
+        raise HTTPException(422, "没有可导出的完成任务")
+    if kind == "result":
+        entries, rows = [], []
+        for t in tasks:
+            doc, suffix = _result_doc(t)
+            entries.append((
+                f"{t['output_name']}_{suffix}.json",
+                json.dumps(doc, ensure_ascii=False, indent=2).encode("utf-8"),
+            ))
+            for page in doc:
+                for k in page.get("kv", []):
+                    rows.append({"filename": t["filename"],
+                                 "page": page.get("page", 0) + 1,
+                                 "key": k.get("key", ""), "value": k.get("value", "")})
+        entries.append(("识别结果汇总.xlsx", bulk.result_summary_xlsx(rows)))
+        return Response(
+            bulk.build_zip(entries), media_type="application/zip",
+            headers={"Content-Disposition":
+                     "attachment; filename*=UTF-8''" + quote("识别结果.zip")},
+        )
+    entries, rows, skipped = [], [], 0
+    columns: dict[str, str] = {}
+    for t in tasks:
+        data = EXTRACTED.get(t["id"]) or _read_json(TASKS_DIR / t["id"] / "extracted.json")
+        if not isinstance(data, dict) or not isinstance(data.get("groups"), list):
+            skipped += 1
+            continue
+        entries.append((
+            f"{t['output_name']}_extracted.json",
+            json.dumps(bulk.flatten_extracted(data, t["filename"]),
+                       ensure_ascii=False, indent=2).encode("utf-8"),
+        ))
+        for g in data["groups"]:
+            row = {"filename": t["filename"],
+                   "group": g.get("index", 0) + 1, "page": g.get("page", 0) + 1}
+            for f in g.get("fields", []):
+                code = f.get("code", "")
+                row[code] = f.get("value", "")
+                columns.setdefault(code, f.get("name") or code)
+            rows.append(row)
+    if not entries:
+        raise HTTPException(422, "所选任务均无抽取结果")
+    entries.append(("抽取结果汇总.xlsx", bulk.extracted_summary_xlsx(
+        rows, [{"code": c, "name": n} for c, n in columns.items()])))
+    return Response(
+        bulk.build_zip(entries), media_type="application/zip",
+        headers={
+            "Content-Disposition": "attachment; filename*=UTF-8''" + quote("抽取结果.zip"),
+            "X-Skipped": str(skipped),
+        },
+    )
 
 
 @app.post("/api/batch/rules/upload")
