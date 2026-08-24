@@ -1,5 +1,10 @@
 # 批量操作与 Docker 一键部署设计
 
+> [!NOTE]
+> This document may not reflect the current implementation.
+> See the final report for up-to-date state:
+> [Final Report](../reports/batch-operations-docker.md)
+
 日期：2026-08-24
 状态：已与用户逐轮确认（批量选择 → 上传模板+批量抽取 → 导出 zip+Excel → 规则 Excel 化 → 规则按任务隔离 → 无弹窗渐进式交互）
 

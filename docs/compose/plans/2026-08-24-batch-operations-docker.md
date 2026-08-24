@@ -1,5 +1,10 @@
 # 批量操作与 Docker 一键部署 实现计划
 
+> [!NOTE]
+> This document may not reflect the current implementation.
+> See the final report for up-to-date state:
+> [Final Report](../reports/batch-operations-docker.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use compose:subagent (recommended) or compose:execute to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 为票据识别系统增加任务批量选择、批量上传规则模板（Excel 化、按任务隔离）、批量抽取、批量导出（zip + Excel 汇总），以及 Docker 一键部署能力。
