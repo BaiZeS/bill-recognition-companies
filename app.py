@@ -164,9 +164,15 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"{MOUNT_POINT} 未挂载（对象存储不可用），拒绝启动")
     TASKS_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    probe = DATA_ROOT / ".write_probe"
-    probe.write_text("ok")
-    probe.unlink()
+    try:
+        probe = DATA_ROOT / ".write_probe"
+        probe.write_text("ok")
+        probe.unlink()
+    except OSError as e:
+        raise RuntimeError(
+            f"{MOUNT_POINT} 不可写（{e}）。"
+            "通常是宿主机磁盘空间不足：cosfs ensure_diskfree=1024 要求本地磁盘至少 1GB 可用。"
+        ) from e
     _load_index()
     threading.Thread(target=_worker, daemon=True).start()
     yield
@@ -200,9 +206,16 @@ def upload(files: list[UploadFile], dewm: bool = Form(True), deseal: bool = Form
             raise HTTPException(400, f"不支持的文件类型：{filename}")
         task_id = uuid.uuid4().hex[:10]
         task_dir = TASKS_DIR / task_id
-        task_dir.mkdir(parents=True, exist_ok=True)
-        with open(task_dir / f"input{ext}", "wb") as f:
-            shutil.copyfileobj(up.file, f)
+        try:
+            task_dir.mkdir(parents=True, exist_ok=True)
+            with open(task_dir / f"input{ext}", "wb") as f:
+                shutil.copyfileobj(up.file, f)
+        except OSError as e:
+            shutil.rmtree(task_dir, ignore_errors=True)  # 清掉半成品任务目录
+            raise HTTPException(
+                500,
+                f"文件写入失败，对象存储暂不可写（通常是宿主机磁盘空间不足）：{e}",
+            ) from e
         base = os.path.splitext(filename)[0] or task_id
         with TASKS_LOCK:
             task = {
@@ -298,9 +311,15 @@ async def save_result(task_id: str, payload: list = Body(...)):
     if task["status"] != "done":
         raise HTTPException(422, "任务未完成，无法保存")
     body = json.dumps(payload, ensure_ascii=False, indent=2)
-    (TASKS_DIR / task_id / "result.json").write_text(body, encoding="utf-8")
-    corrected = OUTPUT_DIR / f"{task['output_name']}_corrected.json"
-    corrected.write_text(body, encoding="utf-8")
+    try:
+        (TASKS_DIR / task_id / "result.json").write_text(body, encoding="utf-8")
+        corrected = OUTPUT_DIR / f"{task['output_name']}_corrected.json"
+        corrected.write_text(body, encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(
+            500,
+            f"保存失败，对象存储暂不可写（通常是宿主机磁盘空间不足）：{e}",
+        ) from e
     RESULTS[task_id] = payload
     task["has_corrected"] = True
     _save_index()
